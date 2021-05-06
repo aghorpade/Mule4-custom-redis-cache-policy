@@ -1,0 +1,44 @@
+id: custom-redis-cache-policy
+name: custom-redis-cache-policy
+description: Custom policy for redis cache
+category: Custom
+type: custom
+resourceLevelSupported: true
+encryptionSupported: false
+standalone: true
+requiredCharacteristics: []
+providedCharacteristics: []
+configuration:
+  - propertyName: RedisHost
+    name: Redis Host
+    description: Redis Host
+    type: string
+    optional: false
+    sensitive: false
+    
+  - propertyName: RedisPort
+    name: Redis Port
+    type: string
+    optional: true
+    defaultValue: 31794
+    sensitive: false
+
+  - propertyName: RedisPassword
+    name: Redis Connection Password
+    type: string
+    optional: true
+    sensitive: true
+   
+  - propertyName: KeyTTL
+    name: Time to live for Key in seconds
+    type: int
+    optional: true
+    defaultValue: 86400
+    sensitive: false
+    
+  - propertyName: KeyExpression
+    name: Mule expression to capture Key
+    type: expression
+    optional: true
+    defaultValue: #[attributes.uriParams.registrationId]
+    sensitive: false

@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:redis="http://www.mulesoft.org/schema/mule/redis"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:http-policy="http://www.mulesoft.org/schema/mule/http-policy"
+	xmlns:http-transform="http://www.mulesoft.org/schema/mule/http-policy-transform"
+	xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+               http://www.mulesoft.org/schema/mule/http-policy http://www.mulesoft.org/schema/mule/http-policy/current/mule-http-policy.xsd
+               http://www.mulesoft.org/schema/mule/http-policy-transform http://www.mulesoft.org/schema/mule/http-policy-transform/current/mule-http-policy-transform.xsd
+			   http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+			   http://www.mulesoft.org/schema/mule/redis http://www.mulesoft.org/schema/mule/redis/current/mule-redis.xsd">
+<!--  redis configuration element -->
+	<redis:redis-config name="Redis_Redis"
+		doc:name="Redis Redis" doc:id="0b2cd0be-7c46-43d6-968e-34ddbe3e9d6c">
+		<redis:nonclustered-connection
+			host="eu1-integral-liger-31794.upstash.io" port="31794"
+			password="5dd5287f74a94555bdcc29b819f361e7" entryTTL="86400" />
+	</redis:redis-config>
+
+
+	<http-policy:proxy
+		name="{{{policyId}}}-custom-policy">
+
+		<http-policy:source>
+<!-- flow which is begining of policy -->
+
+<!-- log request message and required parameter -->
+			<logger level="INFO" doc:name="Logger"
+				doc:id="ba9c7437-5065-4a42-a63c-01a32119c7d5"
+				message="Custom Policy Flow start- Incoming request is #[message] and uriParameter is #[attributes.uriParams.registrationId]" />
+<!-- logic to get uri parameter value as URI param is not working here.(need investigation -->
+
+			<ee:transform
+				xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core">
+				<ee:variables>
+					<ee:set-variable variableName="registrationIdParam"><![CDATA[%dw 2.0
+import * from dw::core::Strings
+output application/json
+---
+{
+"URIRegistrationId" : substringAfter(attributes.requestUri, "/api/vehicles/")
+}]]></ee:set-variable>
+				</ee:variables>
+			</ee:transform>
+<!--  log URI paramter which is used as Key for redis cache -->
+			<logger level="INFO" doc:name="Logger"
+				doc:id="979d688b-10b6-46e8-ba6b-15b8d2d0312b"
+				message="Custom Policy Flow URI parameter value - #[vars.registrationIdParam.URIRegistrationId]" />
+
+
+			<!-- let's log redis connection configuration parameter -->
+			<logger level="INFO" doc:name="Logger"
+				doc:id="4c7fa65e-2553-4f07-9e12-101773627aca"
+				message="Custom Policy Flow Redis configuration parameters are - {{{RedisHost}}} , {{{RedisPort}}} , {{{RedisPassword}}} , {{{KeyTTL}}} ,{{{KeyExpression}}}" />
+
+<!--  put logic in try catch to avoid policy fail and API implementation to be called in case of exception -->
+			<try doc:name="Try" doc:id="9a9b05ff-c208-412f-bf2b-65794b138edb">
+				<redis:get doc:name="Redis: get value for a given key"
+					doc:id="f713eb27-f33c-4da5-bce7-ca8d95dc2d24"
+					config-ref="Redis_Redis" key="{{{KeyExpression}}}" />
+				<error-handler>
+					<on-error-continue enableNotifications="true"
+						logException="true" doc:name="On Error Continue"
+						doc:id="9609cf72-901c-479a-9788-3d8362e77f38">
+						<logger level="INFO" doc:name="Exception Logger"
+							doc:id="1c06af35-e5cd-446a-9542-28127d007f67"
+							message="Redis Exception Logger: exception occured while connecting to redis #[error.errorMessage]" />
+					</on-error-continue>
+				</error-handler>
+			</try>
+
+
+			<logger level="INFO" doc:name="Logger"
+				doc:id="c094b6ad-2f53-48ad-a8e2-746f9e221fcf"
+				message="Redis key response - #[payload]" />
+				<!--  check redis reponse and decide to call api or response with redis cache response -->
+				
+			<choice doc:name="Choice"
+				doc:id="0ed28f7b-3d30-41a2-8441-0047270c10ff">
+				<when expression="#[payload != null]">
+					<logger level="INFO" doc:name="Logger"
+						doc:id="feeb33c1-2920-4511-9f99-a9b5c0ecedb1"
+						message="Redis key response - #[payload]" />
+					<set-payload value="#[payload]" doc:name="Set Payload"
+						doc:id="9456db78-8216-4a95-9fef-b01519184eea" />
+				</when>
+				<otherwise>
+					<logger level="INFO" doc:name="Default Choice Logger"
+						doc:id="55c741ec-173e-4229-8ed9-97ffad0e7034"
+						message="Redis cache Key Not found - call proceed to API" />
+						
+						<!-- below line will inform to execute API implementation flow -->
+					<http-policy:execute-next />
+					<logger level="INFO" doc:name="Default Choice Logger"
+						doc:id="235fed5b-7e2c-4b78-8e6f-b49d73c42fed"
+						message="API call response - #[message]" />
+					
+					<!-- check HTTP status 200 then save payload into redis cache else nothing 
+						to do -->
+						
+					<choice doc:name="Choice"
+						doc:id="5728ffe1-5af2-4724-889d-ea9ae790be6a">
+						<when
+							expression="#[payload != null and attributes.statusCode == 200]">
+							
+							<!--  transform JSON response into string while storing into redis -->
+							<ee:transform doc:name="Transform Message"
+								doc:id="b5514f5a-6ac3-4406-a454-449a3d117c0b">
+								<ee:message>
+									<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+write(payload, "application/json")]]></ee:set-payload>
+								</ee:message>
+							</ee:transform>
+							<set-variable value="#[payload]"
+											doc:name="Set payload into variable"
+											doc:id="fab329f1-54c7-4f08-aa03-cb50c7c14d48"
+											variableName="apiPayload" />
+							<logger level="INFO" doc:name="Default Choice Logger"
+								doc:id="11d16021-01fa-4994-b689-d6fb8b44eac8"
+								message="set key and payload into redis cache- #[message] and key value - #[payload] and value - #[vars.registrationIdParam.URIRegistrationId] and variables #[vars]" />
+
+							<try doc:name="Try"
+								doc:id="8f389122-88c0-40bf-b144-00d6ee4fbd47">
+								<redis:set doc:name="Set"
+									doc:id="1bec4a41-b136-4ac6-8123-c3009321cafe"
+									config-ref="Redis_Redis"
+									key="#[vars.registrationIdParam.URIRegistrationId]"
+									expire="{{{KeyTTL}}}" />
+									
+									<!--  set payload to actual reponse as set redis key respond as ok -->
+									<set-payload value="#[vars.apiPayload]"
+											doc:name="Set Payloa to api response"
+											doc:id="ef56f1a3-155c-42a3-a402-3f29855da49a" />
+								<error-handler>
+									<on-error-continue enableNotifications="true"
+										logException="true" doc:name="On Error Continue"
+										doc:id="f07ad701-06cf-40fb-9dca-827ec85dccec">
+										<logger level="INFO" doc:name="Exception Logger"
+											doc:id="3c945d8a-d2bd-4140-a54d-0eef24a10c82"
+											message="Redis Exception Logger: exception occured while setting key into to redis #[error.errorMessage]" />
+										<set-payload value="#[vars.apiResponse]"
+											doc:name="Set Payload"
+											doc:id="ccfcd64b-0f5c-4456-9af1-b768442cb46a" />
+										<set-variable value="200"
+											doc:name="Set http status code"
+											doc:id="e5acd6a4-1c2b-4d20-8eb2-a0dc783a5644"
+											variableName="httpStatus" />
+									</on-error-continue>
+								</error-handler>
+							</try>
+						</when>
+						<otherwise>
+							<logger level="INFO" doc:name="Default Choice Logger"
+								doc:id="4893832e-8e42-41a1-b3fd-07675b4f382d"
+								message="API call was not successfull so cannot set redis key and value" />
+						</otherwise>
+					</choice>
+				</otherwise>
+			</choice>
+		</http-policy:source>
+	</http-policy:proxy>
+</mule>
